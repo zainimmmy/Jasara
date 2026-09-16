@@ -1,0 +1,6 @@
+// Shared build settings for the Jasara target.
+//
+// Supabase keys live in Secrets.xcconfig next to this file. It is optional and
+// git-ignored: without it the app builds and runs fully, with accounts and
+// friends switched off. Copy Secrets.example.xcconfig to get started.
+#include? "Secrets.xcconfig"

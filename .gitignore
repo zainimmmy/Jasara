@@ -1,0 +1,15 @@
+# macOS
+.DS_Store
+
+# Xcode per-user state and build output
+xcuserdata/
+*.xcuserstate
+DerivedData/
+build/
+
+# Supabase keys for this machine. Copy Config/Secrets.example.xcconfig instead.
+Config/Secrets.xcconfig
+
+# Supabase CLI local state, if you start using it
+supabase/.temp/
+supabase/.branches/
