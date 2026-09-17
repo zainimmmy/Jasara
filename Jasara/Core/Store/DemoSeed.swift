@@ -184,3 +184,17 @@ extension DemoSeed {
     }
 }
 #endif
+
+#if DEBUG
+extension DemoSeed {
+    /// `-JasaraToast` shows the "Alarm set for … from now" note for the first
+    /// enabled alarm shortly after launch, to check how it looks.
+    @MainActor
+    static func toastIfRequested(_ store: AppStore) async {
+        guard ProcessInfo.processInfo.arguments.contains("-JasaraToast") else { return }
+        try? await Task.sleep(for: .seconds(2))
+        let alarms = (try? store.context.fetch(FetchDescriptor<AlarmItem>())) ?? []
+        store.announceAlarmSet(ringsAt: alarms.lazy.compactMap { $0.nextFireDate() }.first)
+    }
+}
+#endif

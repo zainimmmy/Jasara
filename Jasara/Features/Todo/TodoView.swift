@@ -12,8 +12,20 @@ struct TodoView: View {
     @State private var suggestionSeed = Int.random(in: 0...999)
     @State private var showPrayerSetup = false
     @State private var showDone = false
+    @State private var showUpcoming = false
 
-    private var open: [TaskItem] { tasks.filter { !$0.isDone } }
+    /// To do is about now: anything undated, overdue, or for today.
+    private var open: [TaskItem] {
+        let tomorrow = Date().startOfDay.adding(days: 1)
+        return tasks.filter { !$0.isDone && ($0.date.map { $0 < tomorrow } ?? true) }
+    }
+    /// Planned for later, including the next copy of a repeating task.
+    private var upcoming: [TaskItem] {
+        let tomorrow = Date().startOfDay.adding(days: 1)
+        return tasks
+            .filter { !$0.isDone && ($0.date.map { $0 >= tomorrow } ?? false) }
+            .sorted { ($0.date ?? .distantFuture) < ($1.date ?? .distantFuture) }
+    }
     private var doneToday: [TaskItem] {
         tasks.filter { task in
             guard let completedAt = task.completedAt else { return false }
@@ -32,6 +44,7 @@ struct TodoView: View {
                         }
                     }
 
+                    if !upcoming.isEmpty { upcomingSection }
                     if !doneToday.isEmpty { doneSection }
                     suggestions
                 }
@@ -66,6 +79,42 @@ struct TodoView: View {
             }
             DashedAddRow(title: priority == .none ? "Add task" : "Add \(priority.shortTitle.lowercased()) priority task") {
                 newTaskPriority = priority
+            }
+        }
+    }
+
+    private var upcomingSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Button {
+                withAnimation(.snappy) { showUpcoming.toggle() }
+            } label: {
+                HStack(spacing: 6) {
+                    Text("Upcoming").font(Face.sectionTitle).foregroundStyle(Ink.muted)
+                    Text("\(upcoming.count)")
+                        .font(Face.caption.weight(.bold))
+                        .foregroundStyle(Ink.muted)
+                    Image(systemName: "chevron.down")
+                        .font(.system(size: 11, weight: .bold))
+                        .rotationEffect(.degrees(showUpcoming ? 0 : -90))
+                        .foregroundStyle(Ink.muted)
+                    Spacer()
+                }
+                .padding(.horizontal, 4)
+            }
+            .buttonStyle(.plain)
+
+            if showUpcoming {
+                ForEach(upcoming) { task in
+                    VStack(alignment: .leading, spacing: 4) {
+                        if let date = task.date {
+                            Text(date.formatted(.dateTime.weekday(.wide).day().month()))
+                                .font(Face.caption).foregroundStyle(Ink.muted)
+                                .padding(.horizontal, 4)
+                        }
+                        TaskRow(task: task) { editing = task }
+                            .contextMenu { rowMenu(task) }
+                    }
+                }
             }
         }
     }

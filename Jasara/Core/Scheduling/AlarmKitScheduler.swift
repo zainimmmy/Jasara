@@ -26,6 +26,7 @@ final class AlarmKitScheduler: AlarmScheduling {
     private let manager = AlarmManager.shared
 
     var isAuthorized: Bool { manager.authorizationState == .authorized }
+    var isDenied: Bool { manager.authorizationState == .denied }
 
     func requestAuthorization() async -> Bool {
         switch manager.authorizationState {
@@ -39,42 +40,67 @@ final class AlarmKitScheduler: AlarmScheduling {
 
     // MARK: - AlarmScheduling
 
+    /// Reads everything it needs from the model up front, on the main actor, and
+    /// only then talks to AlarmKit.
+    @MainActor
     func schedule(_ alarm: AlarmItem) async {
-        try? manager.cancel(id: alarm.id)
-        let snapshot = AlarmSnapshot(alarm)
-        AlarmRuntime.save(snapshot)
-        guard alarm.isEnabled, await requestAuthorization() else { return }
+        let id = alarm.id
+        try? manager.cancel(id: id)
 
-        let time = Alarm.Schedule.Relative.Time(hour: alarm.hour, minute: alarm.minute)
-        let repeats: Alarm.Schedule.Relative.Recurrence = alarm.repeatsWeekly
-            ? .weekly(Self.weekdays(from: alarm.weekdaysMask))
-            : .never
-        let configuration = Self.configuration(for: snapshot,
-                                               schedule: .relative(.init(time: time, repeats: repeats)),
-                                               snoozesUsed: 0)
+        var snapshot = AlarmSnapshot(alarm)
+        let schedule: Alarm.Schedule?
+        if alarm.isEnabled {
+            if alarm.repeatsWeekly {
+                let time = Alarm.Schedule.Relative.Time(hour: alarm.hour, minute: alarm.minute)
+                schedule = .relative(.init(time: time,
+                                           repeats: .weekly(Self.weekdays(from: alarm.weekdaysMask))))
+            } else if let fire = alarm.oneOffFireDate(), fire > .now {
+                // Fixed, not relative-never: the app needs to know the exact moment
+                // so it can tell afterwards that a one-off has already rung.
+                snapshot.fireDate = fire
+                schedule = .fixed(fire)
+            } else {
+                schedule = nil
+            }
+        } else if let locked = alarm.lockedOccurrence, locked > .now {
+            // Turned off after a group cutoff: this occurrence still counts, so it rings.
+            snapshot.fireDate = locked
+            schedule = .fixed(locked)
+        } else {
+            schedule = nil
+        }
+
+        AlarmRuntime.save(snapshot)
+        guard let schedule, await requestAuthorization() else { return }
         do {
-            _ = try await manager.schedule(id: alarm.id, configuration: configuration)
+            _ = try await manager.schedule(id: id,
+                                           configuration: Self.configuration(for: snapshot,
+                                                                             schedule: schedule,
+                                                                             snoozesUsed: 0))
         } catch {
-            print("AlarmKit refused to schedule \(alarm.id): \(error)")
+            print("AlarmKit refused to schedule \(id): \(error)")
         }
     }
 
-    func cancel(_ alarm: AlarmItem) async {
-        try? manager.cancel(id: alarm.id)
-        await cancelFollowUps(for: alarm)
-        AlarmRuntime.forget(alarm.id)
+    /// Takes the id, not the model, so it's safe after the alarm has been deleted.
+    func cancel(alarmID: UUID) {
+        try? manager.cancel(id: alarmID)
+        Self.settle(alarmID)
+        AlarmRuntime.forget(alarmID)
     }
 
     /// Used by the in-app snooze button on the ring screen.
+    @MainActor
     func scheduleFollowUp(for alarm: AlarmItem, after seconds: TimeInterval) async {
         let snapshot = AlarmSnapshot(alarm)
         AlarmRuntime.save(snapshot)
         await Self.scheduleFollowUp(snapshot, after: seconds, snoozesUsed: AlarmRuntime.snoozes(for: alarm.id))
     }
 
-    /// The wake is settled — solved, stopped, or emergency-stopped.
-    func cancelFollowUps(for alarm: AlarmItem) async {
-        Self.settle(alarm.id)
+    /// The wake is settled — solved, stopped, or emergency-stopped. Synchronous on
+    /// purpose: the ring screen must not be able to reappear before this lands.
+    func settleWake(for alarmID: UUID) {
+        Self.settle(alarmID)
     }
 
     // MARK: - Shared with the intents

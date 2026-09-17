@@ -120,10 +120,15 @@ final class Backend {
             client = nil
             return
         }
-        client = SupabaseClient(
+        let client = SupabaseClient(
             supabaseURL: url,
             supabaseKey: key,
             options: SupabaseClientOptions(auth: .init(emitLocalSessionAsInitialSession: true)))
+        self.client = client
+        // Read the stored session right away, so the first screen already knows
+        // who's signed in instead of waiting for the listener's first event.
+        userID = client.auth.currentUser?.id
+        email = client.auth.currentUser?.email
         Task { await listenForSessionChanges() }
     }
 
@@ -132,7 +137,9 @@ final class Backend {
     private func listenForSessionChanges() async {
         guard let client else { return }
         for await (_, session) in client.auth.authStateChanges {
-            let user = session?.isExpired == false ? session?.user : nil
+            // An expired access token still means signed in: the SDK refreshes it
+            // once there's a connection. Offline users must not look signed out.
+            let user = session?.user
             let changed = user?.id != userID
             userID = user?.id
             email = user?.email
@@ -147,6 +154,11 @@ final class Backend {
     private func require() throws -> SupabaseClient {
         guard let client else { throw BackendError.notConfigured }
         return client
+    }
+
+    /// For extensions in other files, which can't see the private helpers.
+    func signedInClient() throws -> SupabaseClient {
+        try requireUser().0
     }
 
     private func requireUser() throws -> (SupabaseClient, UUID) {

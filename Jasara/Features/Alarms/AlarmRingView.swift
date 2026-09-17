@@ -134,14 +134,13 @@ struct AlarmRingView: View {
         solved = true
         audio.stop()
         store.recordWake(alarm: alarm, snoozes: snoozes, emergencyStopped: false)
-        Task { await store.scheduler.cancelFollowUps(for: alarm) }
+        store.scheduler.settleWake(for: alarm.id)
         store.ringingAlarmID = nil
         dismiss()
     }
 
     private func snooze() {
         AlarmRuntime.addSnooze(for: alarm.id)
-        if alarm.mode == .challenge { AlarmRuntime.pendingChallenge = alarm.id }
         audio.stop()
         Task {
             await store.scheduler.scheduleFollowUp(for: alarm,
@@ -154,7 +153,7 @@ struct AlarmRingView: View {
     private func emergencyStop() {
         audio.stop()
         store.recordWake(alarm: alarm, snoozes: snoozes, emergencyStopped: true)
-        Task { await store.scheduler.cancelFollowUps(for: alarm) }
+        store.scheduler.settleWake(for: alarm.id)
         store.ringingAlarmID = nil
         dismiss()
     }
@@ -186,6 +185,7 @@ struct HoldToStopButton: View {
         }
         .frame(height: 46)
         .contentShape(Rectangle())
+        .onDisappear { cancel() }
         .gesture(
             DragGesture(minimumDistance: 0)
                 .onChanged { _ in start() }

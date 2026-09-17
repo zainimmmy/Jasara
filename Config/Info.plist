@@ -1,17 +1,20 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyLists-1.0.dtd">
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Xcode ignores INFOPLIST_KEY_ build settings it doesn't know, and this is
-	     one of them. Without it AlarmKit refuses to authorize, so it lives here and
-	     is merged into the generated Info.plist. -->
+	<key>BGTaskSchedulerPermittedIdentifiers</key>
+	<array>
+		<string>com.Zoon.Jasara.refresh</string>
+	</array>
 	<key>NSAlarmKitUsageDescription</key>
 	<string>Jasara needs alarm access so your alarms ring on time, even on silent or in Focus.</string>
-	<!-- Filled from Config/Secrets.xcconfig at build time. Empty means the app
-	     runs without accounts or friends. -->
-	<key>SupabaseHost</key>
-	<string>$(SUPABASE_HOST)</string>
 	<key>SupabaseAnonKey</key>
 	<string>$(SUPABASE_ANON_KEY)</string>
+	<key>SupabaseHost</key>
+	<string>$(SUPABASE_HOST)</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>fetch</string>
+	</array>
 </dict>
 </plist>

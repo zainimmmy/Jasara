@@ -29,6 +29,10 @@ final class TaskItem {
     var autoCompleteWithSubtasks: Bool = true
     /// Set on the task generated from the "Daily prayers 🕌" suggestion.
     var isPrayerAnchor: Bool = false
+    /// Ticking a task off, unticking it and ticking it again pays once.
+    var xpAwarded: Bool = false
+    /// A repeating task makes its next occurrence once, however often it's toggled.
+    var repeatSpawned: Bool = false
 
     @Relationship(deleteRule: .cascade, inverse: \Subtask.parent)
     var subtasks: [Subtask] = []
@@ -61,6 +65,27 @@ final class TaskItem {
         set { reminderKindRaw = newValue.rawValue; updatedAt = .now }
     }
     var isDone: Bool { completedAt != nil }
+
+    /// The day this repeating task comes round again, after `day`.
+    func nextOccurrence(after day: Date) -> Date? {
+        let calendar = Calendar.current
+        let start = calendar.startOfDay(for: day)
+        func weekday(_ date: Date) -> Int { calendar.component(.weekday, from: date) }
+        switch repeatRule {
+        case .never:
+            return nil
+        case .daily:
+            return start.adding(days: 1)
+        case .weekly:
+            return start.adding(days: 7)
+        case .weekdays:
+            return (1...7).map { start.adding(days: $0) }.first { (2...6).contains(weekday($0)) }
+        case .custom:
+            guard customDaysMask != 0 else { return nil }
+            return (1...7).map { start.adding(days: $0) }
+                .first { Weekdays.contains(customDaysMask, weekday: weekday($0)) }
+        }
+    }
     var doneSubtasks: Int { subtasks.filter(\.done).count }
     var orderedSubtasks: [Subtask] { subtasks.sorted { $0.order < $1.order } }
 }
@@ -101,6 +126,11 @@ final class AlarmItem {
     /// nothing has to be produced while the alarm is screaming at 6am.
     var preparedPhrases: [String] = []
     var groupID: UUID?
+    /// A one-off group alarm rings on this day only.
+    var onceOn: Date?
+    /// Set when a group member turned their alarm off after the cutoff: the next
+    /// occurrence still counts, so it still rings, once, at this moment.
+    var lockedOccurrence: Date?
     var createdAt: Date = Date()
     var updatedAt: Date = Date()
 
@@ -130,6 +160,39 @@ final class AlarmItem {
         return snoozeEnabled ? min(maxSnoozes, cap) : 0
     }
     var repeatsWeekly: Bool { weekdaysMask != 0 }
+    var isGroupAlarm: Bool { groupID != nil }
+
+    /// The next moment this alarm will actually ring, or nil if it won't.
+    func nextFireDate(after now: Date = .now) -> Date? {
+        guard isEnabled else {
+            // A group alarm switched off after its cutoff still rings once.
+            return lockedOccurrence.flatMap { $0 > now ? $0 : nil }
+        }
+        guard repeatsWeekly else {
+            return oneOffFireDate(after: now).flatMap { $0 > now ? $0 : nil }
+        }
+        let calendar = Calendar.current
+        for offset in 0...7 {
+            let day = calendar.startOfDay(for: now).adding(days: offset)
+            guard Weekdays.contains(weekdaysMask, weekday: calendar.component(.weekday, from: day)),
+                  let ring = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: day),
+                  ring > now else { continue }
+            return ring
+        }
+        return nil
+    }
+
+    /// When a one-off alarm rings: `onceOn` for a group, otherwise the next time
+    /// the clock reads hour:minute.
+    func oneOffFireDate(after now: Date = .now) -> Date? {
+        guard !repeatsWeekly else { return nil }
+        let calendar = Calendar.current
+        if let onceOn {
+            return calendar.date(bySettingHour: hour, minute: minute, second: 0, of: onceOn)
+        }
+        guard let today = calendar.date(bySettingHour: hour, minute: minute, second: 0, of: now) else { return nil }
+        return today > now ? today : today.adding(days: 1)
+    }
 }
 
 @Model
@@ -212,6 +275,7 @@ final class PrayerLog {
     var day: Date = Date()          // start of day
     var statusRaw: Int = PrayerStatus.pending.rawValue
     var markedAt: Date?
+    var xpAwarded: Bool = false
 
     init(prayer: PrayerName, day: Date) {
         self.prayerRaw = prayer.rawValue

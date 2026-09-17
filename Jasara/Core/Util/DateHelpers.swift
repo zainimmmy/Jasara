@@ -33,6 +33,32 @@ extension Date {
     var shortTime: String { formatted(date: .omitted, time: .shortened) }
 }
 
+enum TimeUntil {
+    /// "Alarm set for 7 hr and 30 min from now". Minutes round up, so an alarm
+    /// 29 minutes 50 seconds away reads as 30 min, the way people think of it.
+    static func alarmSetMessage(until date: Date, from now: Date = .now) -> String {
+        let seconds = date.timeIntervalSince(now)
+        guard seconds >= 60 else { return "Alarm set for less than a minute from now" }
+        let total = Int((seconds / 60).rounded(.up))
+        let days = total / 1440
+        let hours = (total % 1440) / 60
+        let minutes = total % 60
+
+        var parts: [String] = []
+        if days > 0 { parts.append("\(days) \(days == 1 ? "day" : "days")") }
+        if hours > 0 { parts.append("\(hours) hr") }
+        if minutes > 0 { parts.append("\(minutes) min") }
+
+        let joined: String
+        switch parts.count {
+        case 1: joined = parts[0]
+        case 2: joined = "\(parts[0]) and \(parts[1])"
+        default: joined = "\(parts[0]), \(parts[1]) and \(parts[2])"
+        }
+        return "Alarm set for \(joined) from now"
+    }
+}
+
 enum Weekdays {
     static let symbols = ["S", "M", "T", "W", "T", "F", "S"]
     static let names = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]

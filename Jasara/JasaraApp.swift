@@ -34,10 +34,23 @@ struct JasaraApp: App {
             RootView()
                 .environment(store)
                 .environment(Backend.shared)
+                .environment(GroupAlarmSync.shared)
                 .modelContainer(container)
                 .preferredColorScheme(store.profile.colorScheme.scheme)
                 .tint(Ink.accent)
         }
+        .backgroundTask(.appRefresh(BackgroundRefresh.identifier)) {
+            await refreshInBackground()
+        }
+    }
+}
+
+extension JasaraApp {
+    @MainActor
+    private func refreshInBackground() async {
+        BackgroundRefresh.schedule()
+        await store.refreshPrayerNotifications()
+        await GroupAlarmSync.shared.refresh(store: store)
     }
 }
 

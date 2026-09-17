@@ -5,12 +5,13 @@ import UserNotifications
 /// `AlarmKitScheduler`, so alarms ring through silent mode and Focus.
 protocol AlarmScheduling {
     func requestAuthorization() async -> Bool
-    func schedule(_ alarm: AlarmItem) async
-    func cancel(_ alarm: AlarmItem) async
+    @MainActor func schedule(_ alarm: AlarmItem) async
+    /// By id, so it's safe to call after the model is deleted.
+    func cancel(alarmID: UUID)
     /// Ring again after a delay — the in-app snooze button.
-    func scheduleFollowUp(for alarm: AlarmItem, after seconds: TimeInterval) async
+    @MainActor func scheduleFollowUp(for alarm: AlarmItem, after seconds: TimeInterval) async
     /// The wake is settled: stop anything still ringing and clear follow-ups.
-    func cancelFollowUps(for alarm: AlarmItem) async
+    func settleWake(for alarmID: UUID)
 }
 
 enum NotificationBudget {
@@ -93,11 +94,26 @@ final class NotificationScheduler {
 
     // MARK: - Prayer nudges
 
-    /// One notification at the prayer time, then nudges at the chosen interval
-    /// until the next prayer begins, capped so the 64 slot budget survives.
-    func schedulePrayers(_ entries: [PrayerService.Entry], settings: PrayerSettings) async {
+    /// Today: one notification at each prayer time, then nudges at the chosen
+    /// interval until the next prayer begins. Tomorrow: just the times, so a day
+    /// without opening the app still gets its reminders. Capped to fit the 64
+    /// slot budget; background refresh tops it up.
+    func schedulePrayers(_ entries: [PrayerService.Entry], tomorrow: [PrayerService.Entry] = [],
+                         settings: PrayerSettings) async {
         cancelPrayers()
         guard settings.isEnabled else { return }
+        for entry in tomorrow where entry.time > .now {
+            let content = UNMutableNotificationContent()
+            content.title = "🕌 \(entry.title)"
+            content.body = "It's time for \(entry.title)."
+            content.sound = .default
+            content.interruptionLevel = .timeSensitive
+            content.categoryIdentifier = "PRAYER"
+            content.userInfo = ["prayer": entry.prayer.rawValue]
+            let components = Calendar.current.dateComponents([.year, .month, .day, .hour, .minute], from: entry.time)
+            await add(id: "\(Prefix.prayer)next.\(entry.prayer.rawValue)", content: content,
+                      trigger: UNCalendarNotificationTrigger(dateMatching: components, repeats: false))
+        }
         let sorted = entries.sorted { $0.time < $1.time }
         for (index, entry) in sorted.enumerated() {
             let nextPrayer = index + 1 < sorted.count ? sorted[index + 1].time : entry.time.addingTimeInterval(4 * 3600)
@@ -124,6 +140,7 @@ final class NotificationScheduler {
     func cancelPrayers() {
         let ids = PrayerName.allCases.flatMap { prayer in
             (0...NotificationBudget.maxNudgesPerPrayer).map { "\(Prefix.prayer)\(prayer.rawValue).\($0)" }
+                + ["\(Prefix.prayer)next.\(prayer.rawValue)"]
         }
         center.removePendingNotificationRequests(withIdentifiers: ids)
     }

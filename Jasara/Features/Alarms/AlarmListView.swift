@@ -7,7 +7,10 @@ struct AlarmListView: View {
     @Binding var showProfile: Bool
 
     @Query(sort: [SortDescriptor(\AlarmItem.hour), SortDescriptor(\AlarmItem.minute)])
-    private var alarms: [AlarmItem]
+    private var allAlarms: [AlarmItem]
+
+    /// Group alarms live in their own section and are managed through the group.
+    private var alarms: [AlarmItem] { allAlarms.filter { !$0.isGroupAlarm } }
 
     @State private var editing: AlarmItem?
     @State private var creating = false
@@ -16,6 +19,11 @@ struct AlarmListView: View {
         NavigationStack {
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
+                    GroupAlarmsSection()
+                        .padding(.bottom, 8)
+
+                    SectionHeaderRow(title: "My alarms", symbol: "alarm", palette: .sky,
+                                     count: alarms.count, onAdd: { creating = true })
                     if alarms.isEmpty {
                         EmptyHint(emoji: "⏰", text: "No alarms yet.\nAdd one and pick how hard it should be to switch off.")
                     }
@@ -59,13 +67,18 @@ struct AlarmCard: View {
                         .foregroundStyle(alarm.isEnabled ? Ink.primary : Ink.muted)
                     Text(meridiem).font(Face.rowStrong).foregroundStyle(Ink.muted)
                     Spacer()
-                    Toggle("", isOn: $alarm.isEnabled)
+                    // A binding rather than onChange, so only a real tap announces
+                    // anything, never the app switching a spent one-off off.
+                    Toggle("", isOn: Binding(get: { alarm.isEnabled }, set: { on in
+                        alarm.isEnabled = on
+                        store.save()
+                        Task {
+                            await store.scheduler.schedule(alarm)
+                            if on { store.announceAlarmSet(ringsAt: alarm.nextFireDate()) }
+                        }
+                    }))
                         .labelsHidden()
                         .tint(Palette.mint.ink)
-                        .onChange(of: alarm.isEnabled) { _, _ in
-                            store.save()
-                            Task { await store.scheduler.schedule(alarm) }
-                        }
                         .accessibilityLabel("\(alarm.label) alarm")
                 }
 
@@ -111,7 +124,7 @@ struct AlarmCard: View {
         .contextMenu {
             Button("Edit", action: onEdit)
             Button("Delete", role: .destructive) {
-                Task { await store.scheduler.cancel(alarm) }
+                store.scheduler.cancel(alarmID: alarm.id)
                 context.delete(alarm)
                 store.save()
             }

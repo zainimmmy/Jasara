@@ -16,12 +16,16 @@ struct TypingChallengeView: View {
     private var matches: Bool { typed == phrase }
 
     var body: some View {
+        // Scrolls, because the keyboard takes half the screen and long phrases must
+        // still be readable in full.
+        ScrollView {
         VStack(spacing: 20) {
             ChallengeHeader(title: "Type it exactly", round: round, total: rounds)
 
             Text(phrase)
                 .font(Face.title(20))
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)   // never truncate the thing to type
                 .padding(14)
                 .frame(maxWidth: .infinity)
                 .background(Ink.surface.opacity(0.9),
@@ -55,6 +59,8 @@ struct TypingChallengeView: View {
             }
         }
         .padding(.horizontal, Metric.gutter)
+        }
+        .scrollDismissesKeyboard(.never)
         .onAppear {
             nextPhrase()
             focused = true

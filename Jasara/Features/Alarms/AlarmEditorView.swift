@@ -120,7 +120,7 @@ struct AlarmEditorView: View {
                 if let alarm {
                     Section {
                         Button("Delete alarm", role: .destructive) {
-                            Task { await store.scheduler.cancel(alarm) }
+                            store.scheduler.cancel(alarmID: alarm.id)
                             context.delete(alarm)
                             store.save()
                             dismiss()
@@ -220,6 +220,7 @@ struct AlarmEditorView: View {
         Task {
             _ = await store.scheduler.requestAuthorization()
             await store.scheduler.schedule(target)
+            store.announceAlarmSet(ringsAt: target.nextFireDate())
         }
         dismiss()
     }

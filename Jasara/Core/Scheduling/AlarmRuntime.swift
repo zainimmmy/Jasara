@@ -10,6 +10,8 @@ struct AlarmSnapshot: Codable, Equatable {
     var snoozeMinutes: Int
     /// Already reduced by the tier's cap.
     var maxSnoozes: Int
+    /// For alarms that ring once: when. Lets the app tell a one-off has rung.
+    var fireDate: Date?
 
     init(_ alarm: AlarmItem) {
         alarmID = alarm.id

@@ -239,7 +239,10 @@ struct TaskEditorView: View {
         store.save()
         Task {
             if target.reminderKind != .none {
-                _ = await NotificationScheduler.shared.requestAuthorization()
+                // Alarm reminders use AlarmKit, which asks for its own permission.
+                if target.reminderKind == .notification {
+                    _ = await NotificationScheduler.shared.requestAuthorization()
+                }
                 await NotificationScheduler.shared.scheduleReminder(for: target)
             } else {
                 NotificationScheduler.shared.cancelReminder(for: target)

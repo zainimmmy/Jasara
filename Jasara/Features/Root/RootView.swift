@@ -5,6 +5,7 @@ enum AppTab: Hashable { case todo, calendar, alarm, timer }
 
 struct RootView: View {
     @Environment(AppStore.self) private var store
+    @Environment(GroupAlarmSync.self) private var groupSync
     @Environment(\.scenePhase) private var scenePhase
     #if DEBUG
     @State private var tab: AppTab = DemoSeed.startTab ?? .todo
@@ -59,6 +60,14 @@ struct RootView: View {
             .sheet(isPresented: $showProfile) { ProfileView() }
 
             XPToast()
+            AlarmSetToast()
+        }
+        // After a group alarm is solved, offer the wake photo once the ring screen is gone.
+        .background {
+            Color.clear.sheet(item: Binding(get: { ringingAlarm == nil ? groupSync.photoPrompt : nil },
+                                            set: { groupSync.photoPrompt = $0 })) { checkIn in
+                WakePhotoSheet(checkIn: checkIn)
+            }
         }
         .fullScreenCover(item: Binding(get: { activeCover },
                                        set: { if $0 == nil { ringingAlarm = nil } })) { cover in
@@ -76,6 +85,7 @@ struct RootView: View {
             DemoSeed.apply(to: store)
             DemoSeed.ringIfRequested(store)
             await DemoSeed.fireIfRequested(store)
+            Task { await DemoSeed.toastIfRequested(store) }
             #endif
             store.ingestAlarmRuntime()
         }
@@ -98,11 +108,10 @@ struct RootView: View {
     }
 
     private func refreshSchedules() async {
-        for alarm in alarms { await store.scheduler.schedule(alarm) }
-        if store.prayerSettings.isEnabled,
-           let entries = store.prayers.entries(for: .now, settings: store.prayerSettings) {
-            await NotificationScheduler.shared.schedulePrayers(entries, settings: store.prayerSettings)
-        }
+        await store.rescheduleAlarms()
+        await store.refreshPrayerNotifications()
+        await GroupAlarmSync.shared.refresh(store: store)
+        BackgroundRefresh.schedule()
     }
 }
 

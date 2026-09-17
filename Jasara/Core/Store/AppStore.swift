@@ -20,6 +20,8 @@ final class AppStore {
     /// Raised by the XP engine so the UI can show a little "+20" toast.
     var lastAward: (amount: Int, reason: XPReason, at: Date)?
     var levelUpTo: Int?
+    /// The brief "Alarm set for … from now" note at the bottom of the screen.
+    private(set) var alarmSetNote: AlarmSetNote?
 
     init(context: ModelContext) {
         self.context = context
@@ -94,13 +96,49 @@ final class AppStore {
         task.completedAt = .now
         task.updatedAt = .now
         NotificationScheduler.shared.cancelReminder(for: task)
-        // Freshly created and instantly ticked off? That's not a day's work.
+        // Freshly created and instantly ticked off? That's not a day's work. And a
+        // task only ever pays once, however many times it's unticked and reticked.
         let age = Date().timeIntervalSince(task.createdAt)
-        if age >= XPRules.minimumTaskAge {
+        if age >= XPRules.minimumTaskAge && !task.xpAwarded {
             awardCapped(.task, XPRules.task, cap: XPRules.taskDailyCap)
+            task.xpAwarded = true
         }
+        spawnNextRepeat(of: task)
         touchDailyStreak()
         save()
+    }
+
+    /// Completing a repeating task puts the next one on its day, with fresh
+    /// subtasks and the reminder moved along by the same number of days.
+    private func spawnNextRepeat(of task: TaskItem) {
+        guard task.repeatRule != .never, !task.repeatSpawned else { return }
+        let today = Date().startOfDay
+        let base = max(task.date?.startOfDay ?? today, today)
+        guard let next = task.nextOccurrence(after: base) else { return }
+
+        let copy = TaskItem(title: task.title, emoji: task.emoji, color: task.palette, priority: task.priority)
+        copy.notes = task.notes
+        copy.date = next
+        copy.section = task.section
+        copy.durationMinutes = task.durationMinutes
+        copy.repeatRule = task.repeatRule
+        copy.customDaysMask = task.customDaysMask
+        copy.autoCompleteWithSubtasks = task.autoCompleteWithSubtasks
+        copy.reminderKind = task.reminderKind
+        if let reminder = task.reminderDate {
+            let shift = Calendar.current.dateComponents([.day], from: task.date?.startOfDay ?? reminder.startOfDay, to: next).day ?? 1
+            copy.reminderDate = reminder.adding(days: max(shift, 1))
+        }
+        context.insert(copy)
+        for step in task.orderedSubtasks {
+            let fresh = Subtask(title: step.title, order: step.order)
+            fresh.parent = copy
+            context.insert(fresh)
+        }
+        task.repeatSpawned = true
+        if copy.reminderKind != .none {
+            Task { await NotificationScheduler.shared.scheduleReminder(for: copy) }
+        }
     }
 
     /// Subtasks never earn XP, so splitting a task into ten doesn't pay ten times.
@@ -125,6 +163,17 @@ final class AppStore {
         event.emergencyStopped = emergencyStopped
         context.insert(event)
 
+        if alarm.isGroupAlarm {
+            GroupAlarmSync.shared.recordWake(alarm: alarm, snoozes: snoozes, emergencyStopped: emergencyStopped)
+        } else if !alarm.repeatsWeekly {
+            // A one-off has done its job. Left enabled, it would ring again tomorrow.
+            alarm.isEnabled = false
+        }
+        // Fresh phrases for next time, so nobody types the same words every morning.
+        if alarm.challenge == .typing {
+            alarm.preparedPhrases = PhraseFactory.prepare(for: alarm)
+        }
+
         // The emergency stop always works, and always costs the streak. That is
         // the deal that keeps the app safe to use.
         guard !emergencyStopped else {
@@ -142,6 +191,59 @@ final class AppStore {
         save()
     }
 
+
+    // MARK: - Alarm set note
+
+    /// Call after an alarm has been scheduled. Says how long until it rings, or
+    /// that it can't ring, because claiming "set" with permission off would be a lie.
+    func announceAlarmSet(ringsAt date: Date?) {
+        let text: String
+        if AlarmKitScheduler.shared.isDenied {
+            text = "Alarms are off for Jasara. Allow them in Settings to ring."
+        } else if !AlarmKitScheduler.shared.isAuthorized {
+            return      // iOS is still asking; the answer decides what to say
+        } else if let date, date > .now {
+            text = TimeUntil.alarmSetMessage(until: date)
+        } else {
+            return
+        }
+        alarmSetNote = AlarmSetNote(text: text)
+        UIAccessibility.post(notification: .announcement, argument: text)
+    }
+
+    func dismissAlarmSetNote(_ id: UUID) {
+        if alarmSetNote?.id == id { alarmSetNote = nil }
+    }
+
+    // MARK: - Scheduling
+
+    /// Brings AlarmKit in line with the alarms on this phone. Run whenever the app
+    /// comes forward. A one-off that has already rung is switched off first —
+    /// rescheduling it would quietly turn it into tomorrow's alarm.
+    func rescheduleAlarms() async {
+        let alarms = (try? context.fetch(FetchDescriptor<AlarmItem>())) ?? []
+        for alarm in alarms {
+            guard let fired = AlarmRuntime.snapshot(for: alarm.id)?.fireDate, fired <= .now else { continue }
+            if alarm.lockedOccurrence.map({ $0 <= .now }) == true {
+                alarm.lockedOccurrence = nil
+            } else if alarm.isEnabled && !alarm.repeatsWeekly {
+                alarm.isEnabled = false
+            }
+        }
+        save()
+        for alarm in alarms { await scheduler.schedule(alarm) }
+    }
+
+    /// Today's prayer notifications and nudges, plus tomorrow's times.
+    func refreshPrayerNotifications() async {
+        guard prayerSettings.isEnabled, prayerSettings.reminderKind != .none else {
+            NotificationScheduler.shared.cancelPrayers()
+            return
+        }
+        guard let today = prayers.entries(for: .now, settings: prayerSettings) else { return }
+        let tomorrow = prayers.entries(for: Date().adding(days: 1), settings: prayerSettings) ?? []
+        await NotificationScheduler.shared.schedulePrayers(today, tomorrow: tomorrow, settings: prayerSettings)
+    }
 
     // MARK: - Alarm intents
 
@@ -176,6 +278,15 @@ final class AppStore {
 
     // MARK: - Prayers
 
+    /// Read-only lookup, safe to call while a view is rendering.
+    func existingLog(for prayer: PrayerName, on day: Date) -> PrayerLog? {
+        let start = day.startOfDay
+        let raw = prayer.rawValue
+        let descriptor = FetchDescriptor<PrayerLog>(
+            predicate: #Predicate { $0.prayerRaw == raw && $0.day == start })
+        return try? context.fetch(descriptor).first
+    }
+
     func log(for prayer: PrayerName, on day: Date) -> PrayerLog {
         let start = day.startOfDay
         let raw = prayer.rawValue
@@ -192,9 +303,10 @@ final class AppStore {
         log.status = status
         log.markedAt = .now
         NotificationScheduler.shared.cancelNudges(for: prayer)
-        if status == .prayed, prayerSettings.countsForXP, let scheduledAt,
+        if status == .prayed, prayerSettings.countsForXP, !log.xpAwarded, let scheduledAt,
            Date() >= scheduledAt {
             award(.prayer, XPRules.prayer)
+            log.xpAwarded = true
         }
         touchDailyStreak()
         save()
@@ -257,4 +369,9 @@ final class AppStore {
         guard profile.hapticsOn else { return }
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
+}
+
+struct AlarmSetNote: Equatable {
+    let id = UUID()
+    let text: String
 }

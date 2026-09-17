@@ -154,7 +154,7 @@ struct PrayerRow: View {
     var entry: PrayerService.Entry
     var day: Date
 
-    private var log: PrayerLog { store.log(for: entry.prayer, on: day) }
+    private var status: PrayerStatus { store.existingLog(for: entry.prayer, on: day)?.status ?? .pending }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -163,8 +163,8 @@ struct PrayerRow: View {
                 Text(entry.title).font(Face.rowStrong)
                 HStack(spacing: 6) {
                     Text(entry.time.shortTime)
-                    if log.status == .qada { Text("• made up") }
-                    if log.status == .missed { Text("• missed") }
+                    if status == .qada { Text("• made up") }
+                    if status == .missed { Text("• missed") }
                 }
                 .font(Face.caption).foregroundStyle(Ink.muted)
             }
@@ -173,11 +173,11 @@ struct PrayerRow: View {
                 Button("Prayed") { store.mark(entry.prayer, on: day, as: .prayed, scheduledAt: entry.time) }
                 Button("Made up (qada)") { store.mark(entry.prayer, on: day, as: .qada, scheduledAt: nil) }
                 Button("Missed") { store.mark(entry.prayer, on: day, as: .missed, scheduledAt: nil) }
-                if log.status != .pending {
+                if status != .pending {
                     Button("Clear") { store.mark(entry.prayer, on: day, as: .pending, scheduledAt: nil) }
                 }
             } label: {
-                CheckCircleLabel(isDone: log.status == .prayed || log.status == .qada)
+                CheckCircleLabel(isDone: status == .prayed || status == .qada)
             }
         }
         .padding(.leading, 12).padding(.vertical, 10).padding(.trailing, 6)

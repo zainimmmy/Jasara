@@ -1,4 +1,5 @@
 import SwiftUI
+import UserNotifications
 import SwiftData
 
 /// Ring countdown with the task's emoji in the middle. Start it from a task or
@@ -15,6 +16,10 @@ struct FocusTimerView: View {
     @State private var linkedTask: TaskItem?
     @State private var timer: Timer?
     @State private var finished = false
+    /// While running, the countdown is worked out from this moment rather than
+    /// by counting ticks, so switching tabs or locking the phone doesn't lose time.
+    @State private var endsAt: Date?
+    @Environment(\.scenePhase) private var scenePhase
 
     private var total: Int { max(minutes * 60, 1) }
     private var fraction: Double { Double(remaining) / Double(total) }
@@ -37,7 +42,10 @@ struct FocusTimerView: View {
             .navigationTitle("Timer")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { TopBar(showProfile: $showProfile) }
-            .onDisappear { pause() }
+            // Ticks stop while the app is in the background; catch up on return.
+            .onChange(of: scenePhase) { _, phase in
+                if phase == .active { tick() }
+            }
         }
     }
 
@@ -160,23 +168,30 @@ struct FocusTimerView: View {
 
     // MARK: - Running
 
+    private static let doneNotification = "focus.done"
+
     private func start() {
         running = true
         finished = false
+        endsAt = Date().addingTimeInterval(Double(remaining))
         timer?.invalidate()
-        timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { _ in
-            guard remaining > 0 else {
-                complete()
-                return
-            }
-            remaining -= 1
-        }
+        timer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { _ in tick() }
+        scheduleDoneNotification()
+    }
+
+    private func tick() {
+        guard running, let endsAt else { return }
+        remaining = max(0, Int(endsAt.timeIntervalSinceNow.rounded(.up)))
+        if remaining == 0 { complete() }
     }
 
     private func pause() {
+        tick()
         running = false
+        endsAt = nil
         timer?.invalidate()
         timer = nil
+        cancelDoneNotification()
     }
 
     private func reset() {
@@ -195,5 +210,25 @@ struct FocusTimerView: View {
                           emoji: linkedTask?.emoji ?? "⏳")
         finished = true
         remaining = minutes * 60
+    }
+
+    /// So a session that ends while the phone is locked still says so.
+    private func scheduleDoneNotification() {
+        guard let endsAt else { return }
+        let content = UNMutableNotificationContent()
+        content.title = "\(linkedTask?.emoji ?? "⏳") Focus session done"
+        content.body = linkedTask.map { "Nice work on \($0.title)." } ?? "Time for a break."
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: max(1, endsAt.timeIntervalSinceNow),
+                                                        repeats: false)
+        Task {
+            _ = await NotificationScheduler.shared.requestAuthorization()
+            try? await UNUserNotificationCenter.current()
+                .add(UNNotificationRequest(identifier: Self.doneNotification, content: content, trigger: trigger))
+        }
+    }
+
+    private func cancelDoneNotification() {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [Self.doneNotification])
     }
 }

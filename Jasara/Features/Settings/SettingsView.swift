@@ -128,6 +128,7 @@ struct SettingsView: View {
                         Button("Sign out") {
                             Task {
                                 await backend.signOut()
+                                GroupAlarmSync.shared.removeAllGroupAlarms(store: store)
                                 profile.isGuest = true
                                 store.save()
                             }
@@ -178,6 +179,7 @@ struct SettingsView: View {
                     Task {
                         do {
                             try await backend.deleteAccount()
+                            GroupAlarmSync.shared.removeAllGroupAlarms(store: store)
                             profile.isGuest = true
                             profile.username = ""
                             wipe()
@@ -211,7 +213,7 @@ struct SettingsView: View {
     /// Account deletion has to erase local data too, not just the server copy.
     private func wipe() {
         for alarm in (try? context.fetch(FetchDescriptor<AlarmItem>())) ?? [] {
-            Task { await store.scheduler.cancel(alarm) }
+            store.scheduler.cancel(alarmID: alarm.id)
         }
         NotificationScheduler.shared.cancelPrayers()
         try? context.delete(model: TaskItem.self)

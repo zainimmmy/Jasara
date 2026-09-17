@@ -28,6 +28,7 @@ and runs normally with accounts and friends switched off — see
 | Alarms: regular + challenge, 7 tiers, 1–100 rounds, snooze caps, silent "Try it" preview, first-run explainer | Done |
 | AlarmKit: rings through silent mode and Focus, snooze from the lock screen, challenge re-arms until solved | Done |
 | Accounts (email + password), friends by exact username, requests, block, report, account deletion | Done, needs Supabase set up |
+| Group alarms: invites, per-member challenge, cutoff lock, offline ringing, check-ins, group streak, +10 group bonus, wake photos | Done, needs Supabase set up |
 | Challenges: Math, Shake (Core Motion), Typing, Colour tiles | Done, all tier-driven |
 | Overstimulated mode: 4 image CAPTCHAs, joke checkboxes ×2, joke terms, 2 typed CAPTCHAs, 15s auth bar, 3 fake calls | Done |
 | Emergency stop (10s hold, always works, breaks the wake streak) | Done |
@@ -38,8 +39,13 @@ and runs normally with accounts and friends switched off — see
 
 ## What isn't built yet
 
-- **Group alarms, wake photos, shared streaks and calendar sharing.** The friend
-  graph they sit on is done; these build on top of it.
+- **Server-side photo moderation.** Wake photos are screened on the device when
+  the person has Sensitive Content Warning or Communication Safety on, are
+  reportable, vanish after 24 hours and are hidden between blocked people. An
+  automated server-side image check is still needed before a public App Store
+  release (guideline 1.2); a friends-only TestFlight is fine without it.
+- **Friend streaks** (per pair of friends in a group) and **calendar sharing**.
+- **Live Activity** for group alarm status.
 - **Sign in with Apple and Google.** Email and password work now. Apple's rules
   say that once Google sign-in ships, Sign in with Apple must ship with it.
 - **Moderation tooling.** Reports land in the `reports` table; for now a
@@ -76,6 +82,36 @@ the lock screen with the system's own alarm UI.
 Silent mode can't be tested on the simulator, which has no ringer switch.
 Check it on a real iPhone: flip the switch to silent, turn on a Focus, and run
 `-JasaraFireIn 30` (below) or set an alarm two minutes out.
+
+## Group alarms
+
+Schema and rules: [`supabase/migrations/20260917000000_group_alarms.sql`](supabase/migrations/20260917000000_group_alarms.sql),
+run after the friends migration.
+
+- **Creating**: the creator sets a label, time, days (or a single date) and the
+  cutoff, then invites friends. Only accepted friends can be invited; groups hold
+  up to 20.
+- **Per member**: everyone picks their own challenge, difficulty and rounds, and
+  flips their own on/off toggle. Times are each member's local time.
+- **Cutoff**: toggles lock at the cutoff the night before (default 9pm). A change
+  after that applies from the following occurrence. Turning off after the cutoff
+  means tomorrow still rings and still counts. Who was in for each morning is
+  frozen at its cutoff, so history stays right however often people toggle.
+- **Ringing**: each joined group becomes a normal local alarm tagged with the
+  group, scheduled through AlarmKit — it rings with no signal, with the same
+  challenges, snooze caps and emergency stop.
+- **Waking**: finishing the alarm queues a check-in that syncs when there's a
+  connection. On time means solved without the emergency stop, from 10 minutes
+  before to 30 minutes after the alarm, and synced within 6 hours. The server
+  judges it against its own clock and computed alarm time.
+- **Group streak**: consecutive mornings where everyone who was in woke on time.
+  **Group bonus**: +10 XP each on those mornings (groups of two or more).
+- **Wake photos**: optional, after solving. Stored privately, visible only to
+  group members for 24 hours, never between blocked people, reportable.
+
+Signing out, or deleting the account, removes group alarms from the phone.
+Nothing else does — being offline, or a slow session restore at launch, never
+touches them.
 
 ## Accounts and friends
 
@@ -137,6 +173,19 @@ A few decisions worth knowing:
   ticked within two minutes earns nothing, priority doesn't change task XP, and
   rounds never change challenge XP.
 
+## TestFlight
+
+Ready for a beta upload: app icon, privacy manifest (`Jasara/PrivacyInfo.xcprivacy`),
+export compliance set (`ITSAppUsesNonExemptEncryption = NO`), background refresh
+registered, and entitlements in `Config/Jasara.entitlements` (time-sensitive
+notifications, on-device photo screening). The Release build compiles for
+devices with no warnings.
+
+Before each upload, bump **Build** (`CURRENT_PROJECT_VERSION`) in the target's
+General tab. External testers need Beta App Review, which will want a demo
+account: create two accounts that are friends and share a group alarm, and put
+the login in the Test Information section.
+
 ## Before it goes anywhere near App Review
 
 The PRD's compliance checklist still applies in full. The parts already honoured
@@ -154,10 +203,11 @@ CallKit and the iOS call screen, and no third-party CAPTCHA branding.
 | `-JasaraDemo` | Seeds a believable day: seven tasks with subtasks, three alarms, prayers on, a 12-day streak and level 10. Only fills an empty store. |
 | `-JasaraTab todo\|calendar\|alarm\|timer` | Lands on that tab. |
 | `-JasaraRing math\|shake\|typing\|tiles\|overstimulated` | Opens the alarm ring screen straight into that challenge, instead of waiting for 6:30am. |
+| `-JasaraToast` | Shows the "Alarm set for … from now" note for the first alarm, a couple of seconds after launch. |
 | `-JasaraFireIn <seconds>` | Asks AlarmKit to ring the first challenge alarm that many seconds from now — a real system alarm, with its snooze and stop intents. |
 
 ```bash
-xcrun simctl launch booted com.zain.jasara -JasaraDemo -JasaraRing overstimulated
+xcrun simctl launch booted com.Zoon.Jasara -JasaraDemo -JasaraRing overstimulated
 ```
 
 The same seed is what App Review's demo notes will want.
@@ -167,7 +217,10 @@ The same seed is what App Review's demo notes will want.
 - Whole module compiles clean: no errors, no warnings, iOS 26 simulator SDK.
 - AlarmKit permission prompt appears with the app's usage string, and the three
   alarm intents are registered in the app's App Intents metadata.
-- Supabase migration: 46/46 checks against real Postgres (see above).
+- Supabase migrations: 103/103 checks against real Postgres with Supabase-shaped
+  `auth` and `storage` schemas — 46 for friends, 57 for group alarms (cutoff
+  locking, check-ins, streaks, photo storage policies, ownership handover,
+  account deletion).
 - All four tabs, onboarding, the alarm ring screen, the math and colour-tile
   challenges and the Overstimulated gauntlet render and run on an iPhone 17 Pro
   simulator.

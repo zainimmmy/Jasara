@@ -219,6 +219,13 @@ struct PrayerSetupView: View {
 
     private func save() {
         let settings = store.prayerSettings
+        // "Use my location" only lives in memory until it's written here. Without
+        // this, automatic prayer times vanished on the next launch.
+        if !manual, let coordinate = store.prayers.coordinate {
+            settings.latitude = coordinate.latitude
+            settings.longitude = coordinate.longitude
+            settings.placeName = store.prayers.placeName ?? settings.placeName
+        }
         settings.manualTimes = manual
         settings.hanafiAsr = hanafi
         settings.method = method
@@ -236,9 +243,7 @@ struct PrayerSetupView: View {
             if reminder != .none {
                 _ = await NotificationScheduler.shared.requestAuthorization()
             }
-            if let entries = store.prayers.entries(for: .now, settings: settings), reminder != .none {
-                await NotificationScheduler.shared.schedulePrayers(entries, settings: settings)
-            }
+            await store.refreshPrayerNotifications()
         }
         dismiss()
     }
